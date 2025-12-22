@@ -1,0 +1,12 @@
+[
+    {
+        "conversation": "Hello, how are you?<|turn|>I'm doing great, thanks for asking!<|turn|>That's wonderful to hear. What are you working on today?<|turn|>I'm working on a machine learning project."
+    },
+    {
+        "conversation": "What is the capital of France?<|turn|>The capital of France is Paris.<|turn|>What about Italy?<|turn|>The capital of Italy is Rome."
+    },
+    {
+        "conversation": "Can you help me with Python?<|turn|>Of course! What would you like to know?<|turn|>How do I create a list?<|turn|>You can create a list using square brackets like this: my_list = [1, 2, 3]"
+    }
+]
+
