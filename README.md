@@ -48,6 +48,25 @@ python train.py --data_path your_conversation_data.json --output_dir ./checkpoin
 - `--text_column`: Column name in HuggingFace dataset containing conversation text (auto-detected if not specified)
 - `--qwen_model_name`: Model name (default: `Bossologist/Qwen3-4B-Instruct-2507_general_ft_merged`)
 
+## Testing
+
+Test the model with a dummy conversation using the inference script:
+
+```bash
+python inference_test.py
+```
+
+Or test with a trained checkpoint:
+
+```bash
+python inference_test.py --checkpoint ./checkpoints/final
+```
+
+The script will:
+1. Load the model (base or from checkpoint)
+2. Process a dummy conversation with multiple turns
+3. Show predictions and compare with actual tokens
+
 ## Configuration
 
 Key parameters you can adjust:
