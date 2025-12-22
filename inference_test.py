@@ -115,15 +115,20 @@ def test_inference(checkpoint_dir=None):
     
     # Create dummy conversation
     print("\n[3/5] Preparing dummy conversation...")
-    turn_separator = "<|turn|>"
+    turn_separator = "<|im_start|>"
     dummy_conversation = (
+        "<|im_start|>user\n"
         "Hello, how are you today?"
-        f"{turn_separator}"
+        "<|im_end|>"
+        f"{turn_separator}assistant\n"
         "I'm doing great, thanks for asking! How about you?"
-        f"{turn_separator}"
+        "<|im_end|>"
+        f"{turn_separator}user\n"
         "I'm also doing well. What are you working on?"
-        f"{turn_separator}"
+        "<|im_end|>"
+        f"{turn_separator}assistant\n"
         "I'm working on a machine learning project."
+        "<|im_end|>"
     )
     
     print(f"Conversation:\n{dummy_conversation}")
@@ -172,7 +177,7 @@ def test_inference(checkpoint_dir=None):
     print("Predictions (last 20 tokens):")
     print("=" * 60)
     
-    last_n = min(20, predicted_token_ids.shape[1])
+    last_n = min(20, predicted_token_ids.shape[1], input_ids.shape[1])
     predicted_text = tokenizer.decode(
         predicted_token_ids[0, -last_n:],
         skip_special_tokens=True
@@ -191,14 +196,33 @@ def test_inference(checkpoint_dir=None):
     print("\n" + "=" * 60)
     print("Token-level predictions (last 10 positions):")
     print("=" * 60)
-    for i in range(max(0, predicted_token_ids.shape[1] - 10), predicted_token_ids.shape[1]):
-        actual_token_id = input_ids[0, i].item()
+    
+    # Handle different sequence lengths (model may add context token)
+    pred_len = predicted_token_ids.shape[1]
+    input_len = input_ids.shape[1]
+    
+    # Show last min(10, pred_len) positions from predictions
+    # Only compare with input_ids where indices are valid
+    num_positions = min(10, pred_len)
+    start_idx = max(0, pred_len - num_positions)
+    
+    for i in range(start_idx, pred_len):
         predicted_token_id = predicted_token_ids[0, i].item()
-        actual_token = tokenizer.decode([actual_token_id], skip_special_tokens=False)
         predicted_token = tokenizer.decode([predicted_token_id], skip_special_tokens=False)
         
-        match = "✓" if actual_token_id == predicted_token_id else "✗"
-        print(f"Position {i:3d}: Actual='{actual_token:15s}' Predicted='{predicted_token:15s}' {match}")
+        # Only compare with input_ids if the index is valid
+        # Note: predicted_token_ids may be longer due to context token, so we align by offset
+        # If pred_len > input_len, there's a context token offset
+        offset = max(0, pred_len - input_len)
+        input_idx = i - offset
+        
+        if input_idx >= 0 and input_idx < input_len:
+            actual_token_id = input_ids[0, input_idx].item()
+            actual_token = tokenizer.decode([actual_token_id], skip_special_tokens=False)
+            match = "✓" if actual_token_id == predicted_token_id else "✗"
+            print(f"Position {i:3d} (input {input_idx:3d}): Actual='{actual_token:15s}' Predicted='{predicted_token:15s}' {match}")
+        else:
+            print(f"Position {i:3d}: Predicted='{predicted_token:15s}' (context token or out of range)")
     
     print("\n" + "=" * 60)
     print("Inference test completed!")
@@ -230,14 +254,18 @@ def test_generation():
     model = model.to(device)
     
     # Create conversation context
-    turn_separator = "<|turn|>"
+    turn_separator = "<|im_start|>"
     conversation = (
+        "<|im_start|>user\n"
         "What is machine learning?"
-        f"{turn_separator}"
+        "<|im_end|>"
+        f"{turn_separator}assistant\n"
         "Machine learning is a subset of artificial intelligence."
-        f"{turn_separator}"
+        "<|im_end|>"
+        f"{turn_separator}user\n"
         "Can you give me an example?"
-        f"{turn_separator}"
+        "<|im_end|>"
+        f"{turn_separator}assistant\n"
     )
     
     print(f"\nConversation context:\n{conversation}")

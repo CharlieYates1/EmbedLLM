@@ -26,7 +26,7 @@ class ConversationDataset(Dataset):
         data_path: str,
         tokenizer,
         max_length: int = 2048,
-        turn_separator: str = "<|turn|>",
+        turn_separator: str = "<|im_start|>",
         text_column: Optional[str] = None,
     ):
         """
@@ -129,17 +129,32 @@ class ConversationDataset(Dataset):
         """
         # Try common formats
         if 'user' in msg_dict and 'assistant' in msg_dict:
-            return f"{msg_dict['user']}{self.turn_separator}{msg_dict['assistant']}"
+            # Format with role tags if using im_start format
+            if self.turn_separator == "<|im_start|>":
+                return f"<|im_start|>user\n{msg_dict['user']}<|im_end|>{self.turn_separator}assistant\n{msg_dict['assistant']}<|im_end|>"
+            else:
+                return f"{msg_dict['user']}{self.turn_separator}{msg_dict['assistant']}"
         elif 'role' in msg_dict and 'content' in msg_dict:
-            return msg_dict['content']
+            # Format with role tag if using im_start format
+            if self.turn_separator == "<|im_start|>":
+                role = msg_dict.get('role', 'user')
+                content = msg_dict.get('content', '')
+                return f"<|im_start|>{role}\n{content}<|im_end|>"
+            else:
+                return msg_dict['content']
         elif 'messages' in msg_dict:
             # Chat format with messages array
             messages = msg_dict['messages']
             parts = []
             for msg in messages:
                 if isinstance(msg, dict):
-                    content = msg.get('content', msg.get('text', str(msg)))
-                    parts.append(str(content))
+                    if self.turn_separator == "<|im_start|>":
+                        role = msg.get('role', 'user')
+                        content = msg.get('content', msg.get('text', str(msg)))
+                        parts.append(f"<|im_start|>{role}\n{content}<|im_end|>")
+                    else:
+                        content = msg.get('content', msg.get('text', str(msg)))
+                        parts.append(str(content))
                 else:
                     parts.append(str(msg))
             return self.turn_separator.join(parts)

@@ -23,7 +23,7 @@ def parse_args():
                         help="Qwen model name")
     parser.add_argument("--perceiver_model_name", type=str, default="deepmind/multimodal-perceiver",
                         help="Perceiver IO model name")
-    parser.add_argument("--batch_size", type=int, default=4, help="Batch size")
+    parser.add_argument("--batch_size", type=int, default=1, help="Batch size")
     parser.add_argument("--learning_rate", type=float, default=5e-5, help="Learning rate")
     parser.add_argument("--num_epochs", type=int, default=3, help="Number of epochs")
     parser.add_argument("--max_length", type=int, default=2048, help="Maximum sequence length")
@@ -33,6 +33,10 @@ def parse_args():
     parser.add_argument("--lora_alpha", type=int, default=32, help="LoRA alpha")
     parser.add_argument("--lora_dropout", type=float, default=0.1, help="LoRA dropout")
     parser.add_argument("--latent_dim", type=int, default=512, help="Perceiver IO latent dimension")
+    parser.add_argument("--gradient_checkpointing", action="store_true", default=True,
+                        help="Enable gradient checkpointing to save memory (default: True)")
+    parser.add_argument("--no_gradient_checkpointing", dest="gradient_checkpointing", action="store_false",
+                        help="Disable gradient checkpointing")
     return parser.parse_args()
 
 
@@ -71,6 +75,7 @@ def train(args):
         lora_r=args.lora_r,
         lora_alpha=args.lora_alpha,
         lora_dropout=args.lora_dropout,
+        gradient_checkpointing=args.gradient_checkpointing,
     )
     model.train()
     
@@ -79,9 +84,18 @@ def train(args):
     model = model.to(device)
     print(f"Using device: {device}")
     
-    # Optimizer
+    # Count trainable parameters
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"Trainable parameters: {trainable_params:,} ({trainable_params / 1e6:.2f}M)")
+    print(f"Total parameters: {total_params:,} ({total_params / 1e6:.2f}M)")
+    print(f"Trainable percentage: {100 * trainable_params / total_params:.2f}%")
+    
+    # Optimizer - only optimize trainable parameters to save memory
+    trainable_params = [p for p in model.parameters() if p.requires_grad]
+    print(f"Optimizer tracking {len(trainable_params)} parameter groups (trainable only)")
     optimizer = torch.optim.AdamW(
-        model.parameters(),
+        trainable_params,
         lr=args.learning_rate,
         weight_decay=0.01,
     )
