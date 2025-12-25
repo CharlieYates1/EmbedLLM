@@ -21,8 +21,6 @@ class PerceiverIOModule(nn.Module):
     def __init__(
         self,
         model_name: str = "deepmind/multimodal-perceiver",
-        latent_dim: int = 512,
-        num_latents: int = 256,
         input_dim: Optional[int] = None,
     ):
         super().__init__()
@@ -40,8 +38,15 @@ class PerceiverIOModule(nn.Module):
                 # Get actual latent dim from model config if available
                 if hasattr(self.perceiver.config, 'd_latents'):
                     self.latent_dim = self.perceiver.config.d_latents
+                    print(f"Perceiver latent dimension: {self.latent_dim}")
                 else:
-                    self.latent_dim = latent_dim
+                    raise ValueError("Could not find Perceiver latent dimension in config")
+
+                if hasattr(self.perceiver.config, 'num_latents'):
+                    self.num_latents = self.perceiver.config.num_latents
+                    print(f"Perceiver number of latents: {self.num_latents}")
+                else:
+                    raise ValueError("Could not find Perceiver number of latents in config")
                 
                 # Get Perceiver's expected input dimension
                 if hasattr(self.perceiver.config, 'd_model'):
@@ -63,8 +68,6 @@ class PerceiverIOModule(nn.Module):
                 print(f"Warning: Could not load Perceiver IO model '{model_name}'. Error: {e}")
                 print("Creating a simple MLP-based encoder as fallback.")
                 raise e
-        
-        self.num_latents = num_latents
     
     def freeze_base_model(self):
         """
