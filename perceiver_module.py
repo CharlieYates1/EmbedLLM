@@ -10,51 +10,6 @@ try:
 except ImportError:
     PerceiverModel = None
 
-class CrossAttentionCompressor(nn.Module):
-    """
-    Uses cross-attention to compress Perceiver IO latent space into a single vector.
-    """
-    def __init__(self, latent_dim: int, num_heads: int = 8, dropout: float = 0.1):
-        super().__init__()
-        self.query = nn.Parameter(torch.randn(1, 1, latent_dim))
-        self.cross_attention = nn.MultiheadAttention(
-            embed_dim=latent_dim,
-            num_heads=num_heads,
-            dropout=dropout,
-            batch_first=True
-        )
-        self.layer_norm = nn.LayerNorm(latent_dim)
-        self.dropout = nn.Dropout(dropout)
-        
-    def forward(self, latents: torch.Tensor, attention_mask: Optional[torch.Tensor] = None):
-        """
-        Compress multiple latent vectors into a single vector using cross-attention.
-        
-        Args:
-            latents: Tensor of shape (batch_size, num_latents, latent_dim)
-            attention_mask: Optional attention mask for latents
-            
-        Returns:
-            Single compressed vector of shape (batch_size, 1, latent_dim)
-        """
-        batch_size = latents.shape[0]
-        # Expand query to batch size
-        query = self.query.expand(batch_size, -1, -1)
-        
-        # Apply cross-attention: query attends to latents
-        attn_output, _ = self.cross_attention(
-            query=query,
-            key=latents,
-            value=latents,
-            key_padding_mask=attention_mask
-        )
-        
-        # Residual connection and layer norm
-        output = self.layer_norm(attn_output + query)
-        output = self.dropout(output)
-        
-        return output
-
 class PerceiverIOModule(nn.Module):
     """
     Wrapper around Perceiver IO model for processing conversation turns.
@@ -71,7 +26,7 @@ class PerceiverIOModule(nn.Module):
         self.perceiver = None
         self.fallback_encoder = None
         self.input_projection = None
-        
+
         if PerceiverModel is not None:
             try:
                 # Load with low_cpu_mem_usage to reduce memory spikes
@@ -109,16 +64,11 @@ class PerceiverIOModule(nn.Module):
                 print(f"Warning: Could not load Perceiver IO model '{model_name}'. Error: {e}")
                 print("Creating a simple MLP-based encoder as fallback.")
                 raise e
-
-        self.compressor = CrossAttentionCompressor(
-            latent_dim=self.latent_dim,
-            num_heads=8,
-        )
     
     def freeze_base_model(self):
         """
         Freeze all parameters in the base PerceiverModel.
-        The input_projection, CrossAttentionCompressor and projection layer added later remain trainable.
+        The input_projection layer remains trainable.
         """
         if self.perceiver is None:
             return
@@ -138,7 +88,6 @@ class PerceiverIOModule(nn.Module):
         if self.input_projection is not None:
             input_proj_params = sum(p.numel() for p in self.input_projection.parameters())
             print(f"Input projection layer (trainable): {input_proj_params:,} parameters")
-        
     def forward(self, inputs: torch.Tensor, attention_mask: Optional[torch.Tensor] = None):
         """
         Process inputs through Perceiver IO.
@@ -161,7 +110,7 @@ class PerceiverIOModule(nn.Module):
                 attention_mask=attention_mask
             )
             outputs = outputs.last_hidden_state
-            return self.compressor(outputs)
+            return outputs
         except Exception as e:
             print(f"Warning: Perceiver IO forward pass failed: {e}")
             raise e
