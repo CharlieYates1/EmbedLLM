@@ -78,14 +78,18 @@ class ConversationDataset(Dataset):
                 # Convert dataset to list format
                 for item in dataset_split:
                     text = item.get(text_column, "")
-                    # Handle different formats
-                    if isinstance(text, list):
-                        # If it's a list of messages, join them
-                        text = self.turn_separator.join(str(msg) for msg in text)
-                    elif isinstance(text, dict):
-                        # If it's a dict (e.g., with 'user' and 'assistant' keys), format it
-                        text = self._format_message_dict(text)
-                    self.data.append({"conversation": str(text)})
+                    turns = ["<|im_start|>" + t for t in text.split("<|im_start|>") if t.strip()]
+                    for turn in turns:
+                        actual_text = turn.replace("<|im_start|>", "").replace("<|im_end|>", "").strip()
+                        if actual_text.startswith("user"):
+                            actual_text = actual_text.replace("user", "").strip()
+                        elif actual_text.startswith("assistant"):
+                            actual_text = actual_text.replace("assistant", "").strip()
+                        else:
+                            actual_text = actual_text.replace("system", "").strip()
+                        actual_text = actual_text.replace("<tool>", "").replace("</tool>", "").strip()
+                        actual_text = actual_text.replace("<think>", "").replace("</think>", "").strip()
+                        self.data.append({"conversation": actual_text})
                 
                 print(f"Loaded {len(self.data)} examples from HuggingFace dataset")
             except Exception as e:
@@ -266,6 +270,6 @@ def collate_fn(batch):
         "input_ids": torch.stack([item["input_ids"] for item in batch]),
         "attention_mask": torch.stack([item["attention_mask"] for item in batch]),
         "labels": torch.stack([item["labels"] for item in batch]),
-        "turn_boundaries": [item["turn_boundaries"] for item in batch],
+        # "turn_boundaries": [item["turn_boundaries"] for item in batch],
     }
 
