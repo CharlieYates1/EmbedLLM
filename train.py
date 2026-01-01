@@ -8,7 +8,7 @@ from transformers import AutoTokenizer, get_linear_schedule_with_warmup
 from tqdm import tqdm
 import os
 
-from model import PerceiverQwenModel
+from QwenWithPerceiverCrossAttn import QwenWithPerceiverCrossAttn
 from data_utils import ConversationDataset, collate_fn
 
 
@@ -67,15 +67,9 @@ def train(args):
     
     # Initialize model
     print("Initializing model...")
-    model = PerceiverQwenModel(
+    model = QwenWithPerceiverCrossAttn(
         qwen_model_name=args.qwen_model_name,
         perceiver_model_name=args.perceiver_model_name,
-        latent_dim=args.latent_dim,
-        use_lora=True,
-        lora_r=args.lora_r,
-        lora_alpha=args.lora_alpha,
-        lora_dropout=args.lora_dropout,
-        gradient_checkpointing=args.gradient_checkpointing,
     )
     model.train()
     
@@ -121,17 +115,15 @@ def train(args):
             input_ids = batch["input_ids"].to(device)
             attention_mask = batch["attention_mask"].to(device)
             labels = batch["labels"].to(device)
-            turn_boundaries = batch["turn_boundaries"]
             
             # Forward pass
             optimizer.zero_grad()
-            
-            logits, loss = model(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                labels=labels,
-                turn_boundaries=turn_boundaries,
-            )
+            with torch.autocast("cuda", dtype=torch.float16):
+                logits, loss = model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    labels=labels,
+                )
             
             # Backward pass
             loss.backward()
