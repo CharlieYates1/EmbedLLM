@@ -47,20 +47,8 @@ class QwenWithPerceiverCrossAttn(nn.Module):
             model_name=perceiver_model_name,
             input_dim=self.qwen_model.config.hidden_size,
         )
-        self._perceiver_outputs = None
         self.layer_index = layer_index
-        
-        # Modify the specified layer
-        self._freeze_qwen_model()
-        self._modify_layer()
 
-    def _freeze_qwen_model(self):
-        """Freeze the Qwen model."""
-        for param in self.qwen_model.parameters():
-            param.requires_grad = False
-    
-    def _modify_layer(self):
-        """Insert cross-attention into the specified layer."""
         # Access transformer layers
         if hasattr(self.qwen_model, 'model') and hasattr(self.qwen_model.model, 'layers'):
             layers = self.qwen_model.model.layers
@@ -76,10 +64,23 @@ class QwenWithPerceiverCrossAttn(nn.Module):
             )
         
         # Get the target layer
-        target_layer = layers[self.layer_index]
+        self.target_layer = layers[self.layer_index]
+        self.target_layer.perceiver_outputs = None
+        
+        # Modify the specified layer
+        self._freeze_qwen_model()
+        self._modify_layer()
+
+    def _freeze_qwen_model(self):
+        """Freeze the Qwen model."""
+        for param in self.qwen_model.parameters():
+            param.requires_grad = False
+    
+    def _modify_layer(self):
+        """Insert cross-attention into the specified layer."""
         
         # Get the device and dtype of the target layer
-        layer_device = next(target_layer.parameters()).device
+        layer_device = next(self.target_layer.parameters()).device
         
         # Create cross-attention module
         cross_attn = PerceiverCrossAttention(
@@ -93,11 +94,11 @@ class QwenWithPerceiverCrossAttn(nn.Module):
         cross_attn_layer_norm = nn.LayerNorm(self.hidden_size).to(device=layer_device, dtype=self.model_dtype)
         
         # Store cross-attention components and reference to memory manager
-        target_layer.perceiver_cross_attn = cross_attn
-        target_layer.cross_attn_layer_norm = cross_attn_layer_norm
+        self.target_layer.perceiver_cross_attn = cross_attn
+        self.target_layer.cross_attn_layer_norm = cross_attn_layer_norm
         
         # Patch the forward method
-        original_forward = target_layer.forward
+        original_forward = self.target_layer.forward
         
         def patched_forward(
             hidden_states,
@@ -132,14 +133,14 @@ class QwenWithPerceiverCrossAttn(nn.Module):
                 other_outputs = ()
             
             # Apply cross-attention
-            if self._perceiver_outputs is not None:
-                cross_attn_output, cross_attn_weights = target_layer.perceiver_cross_attn(
+            if self.target_layer.perceiver_outputs is not None:
+                cross_attn_output, cross_attn_weights = self.target_layer.perceiver_cross_attn(
                     hidden_states=hidden_states,
-                    perceiver_outputs=self._perceiver_outputs,
+                    perceiver_outputs=self.target_layer.perceiver_outputs,
                 )
                 
                 # Add residual and layer norm
-                hidden_states = target_layer.cross_attn_layer_norm(
+                hidden_states = self.target_layer.cross_attn_layer_norm(
                     hidden_states + cross_attn_output
                 )
             
@@ -148,7 +149,15 @@ class QwenWithPerceiverCrossAttn(nn.Module):
                 return (hidden_states,) + other_outputs
             return hidden_states
         
-        target_layer.forward = patched_forward
+        self.target_layer.forward = patched_forward
+
+    def update_perceiver_outputs(self, input_ids: torch.Tensor):
+        """Update the Perceiver outputs."""
+        embed_layer = self.qwen_model.get_input_embeddings()
+        inputs_embeds = embed_layer(input_ids)
+        if inputs_embeds.dtype != self.model_dtype:
+            inputs_embeds = inputs_embeds.to(dtype=self.model_dtype)
+        self.target_layer.perceiver_outputs = self.perceiver(inputs_embeds)
     
     def forward(
         self,
@@ -164,21 +173,12 @@ class QwenWithPerceiverCrossAttn(nn.Module):
         return_dict: Optional[bool] = None,
         **kwargs,
     ):
-        """
-        Forward pass with memory augmentation.
-        """
-        embed_layer = self.qwen_model.get_input_embeddings()
-        inputs_embeds = embed_layer(input_ids)
-        if inputs_embeds.dtype != self.model_dtype:
-            inputs_embeds = inputs_embeds.to(dtype=self.model_dtype)
-        self._perceiver_outputs = self.perceiver(inputs_embeds)
-
         # Standard forward through model
         outputs = self.qwen_model(
+            input_ids=input_ids,
             attention_mask=attention_mask,
             position_ids=position_ids,
             past_key_values=past_key_values,
-            inputs_embeds=inputs_embeds,
             labels=labels,
             use_cache=use_cache,
             output_attentions=output_attentions,
