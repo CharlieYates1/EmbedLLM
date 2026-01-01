@@ -116,18 +116,48 @@ def train(args):
             attention_mask = batch["attention_mask"].to(device)
             labels = batch["labels"].to(device)
             
+            print(f"Input shape: {input_ids.shape}, Labels shape: {labels.shape}")
+            
+            # Show first few tokens of input
+            input_sample = input_ids[0, -50:].cpu().tolist()  # First 50 tokens
+            print(f"Last 50 input tokens: {input_sample}")
+            print(f"Input text (Last 200 chars): {tokenizer.decode(input_ids[0], skip_special_tokens=True)[-200:]}")
+            
+            # Show labels (filter out -100)
+            labels_sample = labels[0, :50].cpu().tolist()
+            valid_labels = [l for l in labels_sample if l != -100]
+            print(f"First 50 labels (excluding -100): {labels_sample}")
+            print(f"Valid label count: {(labels[0] != -100).sum().item()}/{labels.shape[1]}")
+            
+            # Show what we're predicting (labels are shifted, so label[i] predicts token at position i+1)
+            if len(valid_labels) > 0:
+                # Show first few predictions
+                first_valid_labels = labels[0, :20].cpu()
+                valid_mask = first_valid_labels != -100
+                if valid_mask.any():
+                    valid_label_tokens = first_valid_labels[valid_mask][:5].tolist()
+                    print(f"First few tokens to predict: {valid_label_tokens}")
+                    try:
+                        pred_text = tokenizer.decode(valid_label_tokens, skip_special_tokens=True)
+                        print(f"Predicted text sample: {pred_text[:100]}")
+                    except:
+                        print("Could not decode prediction tokens")
+            print("=" * 50 + "\n")
+            
             # Forward pass
             optimizer.zero_grad()
-            with torch.autocast("cuda", dtype=torch.float16):
+            with torch.autocast("cuda", dtype=torch.float16, enabled=True):
                 logits, loss = model(
                     input_ids=input_ids,
                     attention_mask=attention_mask,
                     labels=labels,
                 )
+
+            print("Predicted text: ", tokenizer.decode(torch.argmax(logits, dim=-1)[0], skip_special_tokens=True))
             
-            # Backward pass
+            # Backward pass (no GradScaler needed since model is already FP16)
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            grad_norm = torch.nn.utils.clip_grad_norm_(trainable_params, 1.0)
             optimizer.step()
             scheduler.step()
             
@@ -135,7 +165,11 @@ def train(args):
             global_step += 1
             
             # Update progress bar
-            progress_bar.set_postfix({"loss": loss.item(), "avg_loss": epoch_loss / global_step})
+            progress_bar.set_postfix({
+                "loss": loss.item(), 
+                "avg_loss": epoch_loss / global_step,
+                "grad_norm": grad_norm.item() if not torch.isnan(grad_norm) else 0.0
+            })
             
             # Save checkpoint
             if global_step % args.save_steps == 0:
@@ -145,12 +179,27 @@ def train(args):
                 # Save model
                 model.qwen_model.save_pretrained(checkpoint_dir)
                 
-                # Save other components
-                torch.save({
-                    "compressor": model.compressor.state_dict(),
-                    "projection": model.projection.state_dict(),
+                # Save Perceiver module and cross-attention components
+                additional_components = {
                     "perceiver": model.perceiver.state_dict(),
-                }, os.path.join(checkpoint_dir, "additional_components.pt"))
+                }
+                
+                # Save cross-attention modules from the modified layer
+                if hasattr(model.qwen_model, 'model') and hasattr(model.qwen_model.model, 'layers'):
+                    layers = model.qwen_model.model.layers
+                elif hasattr(model.qwen_model, 'layers'):
+                    layers = model.qwen_model.layers
+                else:
+                    layers = None
+                
+                if layers is not None and model.layer_index < len(layers):
+                    target_layer = layers[model.layer_index]
+                    if hasattr(target_layer, 'perceiver_cross_attn'):
+                        additional_components["perceiver_cross_attn"] = target_layer.perceiver_cross_attn.state_dict()
+                    if hasattr(target_layer, 'cross_attn_layer_norm'):
+                        additional_components["cross_attn_layer_norm"] = target_layer.cross_attn_layer_norm.state_dict()
+                
+                torch.save(additional_components, os.path.join(checkpoint_dir, "additional_components.pt"))
                 
                 tokenizer.save_pretrained(checkpoint_dir)
                 print(f"\nSaved checkpoint to {checkpoint_dir}")
@@ -164,11 +213,28 @@ def train(args):
     final_dir = os.path.join(args.output_dir, "final")
     os.makedirs(final_dir, exist_ok=True)
     model.qwen_model.save_pretrained(final_dir)
-    torch.save({
-        "compressor": model.compressor.state_dict(),
-        "projection": model.projection.state_dict(),
+    
+    # Save Perceiver module and cross-attention components
+    additional_components = {
         "perceiver": model.perceiver.state_dict(),
-    }, os.path.join(final_dir, "additional_components.pt"))
+    }
+    
+    # Save cross-attention modules from the modified layer
+    if hasattr(model.qwen_model, 'model') and hasattr(model.qwen_model.model, 'layers'):
+        layers = model.qwen_model.model.layers
+    elif hasattr(model.qwen_model, 'layers'):
+        layers = model.qwen_model.layers
+    else:
+        layers = None
+    
+    if layers is not None and model.layer_index < len(layers):
+        target_layer = layers[model.layer_index]
+        if hasattr(target_layer, 'perceiver_cross_attn'):
+            additional_components["perceiver_cross_attn"] = target_layer.perceiver_cross_attn.state_dict()
+        if hasattr(target_layer, 'cross_attn_layer_norm'):
+            additional_components["cross_attn_layer_norm"] = target_layer.cross_attn_layer_norm.state_dict()
+    
+    torch.save(additional_components, os.path.join(final_dir, "additional_components.pt"))
     tokenizer.save_pretrained(final_dir)
     print(f"Final model saved to {final_dir}")
 
