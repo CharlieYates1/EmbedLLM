@@ -7,6 +7,7 @@ from torch.utils.data import DataLoader
 from transformers import AutoTokenizer, get_linear_schedule_with_warmup
 from tqdm import tqdm
 import os
+from accelerate import Accelerator
 
 from QwenWithPerceiverCrossAttn import QwenWithPerceiverCrossAttn
 from data_utils import ConversationDataset, collate_fn
@@ -23,8 +24,8 @@ def parse_args():
                         help="Qwen model name")
     parser.add_argument("--perceiver_model_name", type=str, default="deepmind/multimodal-perceiver",
                         help="Perceiver IO model name")
-    parser.add_argument("--batch_size", type=int, default=1, help="Batch size")
-    parser.add_argument("--learning_rate", type=float, default=5e-5, help="Learning rate")
+    parser.add_argument("--batch_size", type=int, default=4, help="Batch size")
+    parser.add_argument("--learning_rate", type=float, default=1e-5, help="Learning rate")
     parser.add_argument("--num_epochs", type=int, default=3, help="Number of epochs")
     parser.add_argument("--max_length", type=int, default=128, help="Maximum sequence length")
     parser.add_argument("--warmup_steps", type=int, default=100, help="Warmup steps")
@@ -64,7 +65,22 @@ def train(args):
         shuffle=True,
         collate_fn=collate_fn,
     )
-    
+    # Only keep at most 10000 batches in the DataLoader by subsampling the dataset
+    max_batches = 7000
+    batches_in_dataset = len(dataloader)
+    if batches_in_dataset > max_batches:
+        print(f"Limiting DataLoader to {max_batches} batches (original: {batches_in_dataset})")
+        # Convert DataLoader to list, subsample, then reload as DataLoader for batching
+        sampled_indices = torch.randperm(len(dataset))[:args.batch_size * max_batches].tolist()
+        # Create a new dataset with only sampled indices
+        from torch.utils.data import Subset
+        dataset = Subset(dataset, sampled_indices)
+        dataloader = DataLoader(
+            dataset,
+            batch_size=args.batch_size,
+            shuffle=True,
+            collate_fn=collate_fn,
+        )
     # Initialize model
     print("Initializing model...")
     model = QwenWithPerceiverCrossAttn(
@@ -72,7 +88,6 @@ def train(args):
         perceiver_model_name=args.perceiver_model_name,
     )
     model.train()
-    model.half()
     
     # Move to device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -93,7 +108,7 @@ def train(args):
         trainable_params,
         lr=args.learning_rate,
         weight_decay=0.01,
-        eps=1e-7,
+        eps=1e-4,
     )
     
     # Learning rate scheduler
@@ -102,6 +117,11 @@ def train(args):
         optimizer,
         num_warmup_steps=args.warmup_steps,
         num_training_steps=num_training_steps,
+    )
+
+    accelerator = Accelerator()
+    model, optimizer, dataloader, scheduler = accelerator.prepare(
+        model, optimizer, dataloader, scheduler
     )
     
     # Training loop
@@ -141,11 +161,16 @@ def train(args):
                 perceiver_input_ids=input_ids,
             )
 
+            if torch.isinf(logits).any() or torch.isnan(logits).any():
+                print("WARNING: Detected NaN or Inf in logits at global_step", global_step)
+                print("Logits:", logits)
+                continue
+
             if global_step == 0:
                 print("Predicted text: ", tokenizer.decode(torch.argmax(logits, dim=-1)[0][:10], skip_special_tokens=True))
             
-            loss.backward()
-            grad_norm = torch.nn.utils.clip_grad_norm_(trainable_params, 1.0)
+            accelerator.backward(loss)
+            grad_norm = accelerator.clip_grad_norm_(trainable_params, 1.0)
             optimizer.step()
             scheduler.step()
             

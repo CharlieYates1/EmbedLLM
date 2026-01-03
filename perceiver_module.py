@@ -41,7 +41,7 @@ class PerceiverIOModule(nn.Module):
         
         # Create projection layer if input_dim is provided and different from Perceiver's expected dim
         if input_dim is not None and input_dim != perceiver_input_dim:
-            self.input_projection = nn.Linear(input_dim, perceiver_input_dim, dtype=torch.float16)
+            self.input_projection = nn.Linear(input_dim, perceiver_input_dim)
             print(f"Created input projection: {input_dim} -> {perceiver_input_dim}")
         else:
             print(f"Perceiver input dimension: {perceiver_input_dim}, LLM embedding dimension: {input_dim}")
@@ -80,7 +80,6 @@ class PerceiverIOModule(nn.Module):
         Returns:
             Latent representations of shape (batch_size, num_latents, latent_dim)
         """
-        print("Inputs before projection: ", inputs)
         # Project inputs to Perceiver's expected dimension if needed
         if self.input_projection is not None:
             inputs = self.input_projection(inputs)

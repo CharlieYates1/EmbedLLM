@@ -33,10 +33,9 @@ class QwenWithPerceiverCrossAttn(nn.Module):
         
         self.qwen_model = AutoModelForCausalLM.from_pretrained(
             qwen_model_name,
-            torch_dtype=torch.float16,
             trust_remote_code=True
         )
-        self.gate = nn.Parameter(torch.tensor(-4.0, dtype=torch.float16))
+        self.gate = nn.Parameter(torch.tensor(-4.0))
 
         self.model_dtype = next(self.qwen_model.parameters()).dtype
 
@@ -90,8 +89,8 @@ class QwenWithPerceiverCrossAttn(nn.Module):
         )
         
         # Move cross-attention modules to the same device and dtype as the layer
-        cross_attn = cross_attn.to(device=layer_device, dtype=self.model_dtype)
-        cross_attn_layer_norm = nn.LayerNorm(self.hidden_size).to(device=layer_device, dtype=self.model_dtype)
+        cross_attn = cross_attn.to(device=layer_device)
+        cross_attn_layer_norm = nn.LayerNorm(self.hidden_size).to(device=layer_device)
         
         # Store cross-attention components and reference to memory manager
         self.target_layer.perceiver_cross_attn = cross_attn
@@ -172,8 +171,6 @@ class QwenWithPerceiverCrossAttn(nn.Module):
         # convert perceiver inputs to embeddings
         if perceiver_input_ids is not None:
             perceiver_inputs = self.qwen_model.get_input_embeddings()(perceiver_input_ids)
-            if perceiver_inputs.dtype != self.model_dtype:
-                perceiver_inputs = perceiver_inputs.to(dtype=self.model_dtype)
         else:
             perceiver_inputs = None
 
