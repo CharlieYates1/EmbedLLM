@@ -35,7 +35,6 @@ class QwenWithPerceiverCrossAttn(nn.Module):
             qwen_model_name,
             trust_remote_code=True
         )
-        self.gate = nn.Parameter(torch.tensor(-4.0))
 
         self.model_dtype = next(self.qwen_model.parameters()).dtype
 
@@ -133,7 +132,7 @@ class QwenWithPerceiverCrossAttn(nn.Module):
                 other_outputs = ()
             
             # Apply cross-attention
-            alpha = torch.sigmoid(self.gate)
+            alpha = 0.5
             if perceiver_inputs is not None:
                 perceiver_outputs = self.perceiver(perceiver_inputs)
                 cross_attn_output, cross_attn_weights = self.target_layer.perceiver_cross_attn(

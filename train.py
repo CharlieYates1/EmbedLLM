@@ -11,6 +11,7 @@ from accelerate import Accelerator
 
 from QwenWithPerceiverCrossAttn import QwenWithPerceiverCrossAttn
 from data_utils import ConversationDataset, collate_fn
+from load_checkpoint import load_model_from_checkpoint
 
 
 def parse_args():
@@ -26,10 +27,10 @@ def parse_args():
                         help="Perceiver IO model name")
     parser.add_argument("--batch_size", type=int, default=4, help="Batch size")
     parser.add_argument("--learning_rate", type=float, default=1e-5, help="Learning rate")
-    parser.add_argument("--num_epochs", type=int, default=3, help="Number of epochs")
+    parser.add_argument("--num_epochs", type=int, default=1, help="Number of epochs")
     parser.add_argument("--max_length", type=int, default=128, help="Maximum sequence length")
     parser.add_argument("--warmup_steps", type=int, default=100, help="Warmup steps")
-    parser.add_argument("--save_steps", type=int, default=500, help="Save checkpoint every N steps")
+    parser.add_argument("--save_steps", type=int, default=20000, help="Save checkpoint every N steps")
     parser.add_argument("--lora_r", type=int, default=16, help="LoRA rank")
     parser.add_argument("--lora_alpha", type=int, default=32, help="LoRA alpha")
     parser.add_argument("--lora_dropout", type=float, default=0.1, help="LoRA dropout")
@@ -38,6 +39,8 @@ def parse_args():
                         help="Enable gradient checkpointing to save memory (default: True)")
     parser.add_argument("--no_gradient_checkpointing", dest="gradient_checkpointing", action="store_false",
                         help="Disable gradient checkpointing")
+    parser.add_argument("--resume_from_checkpoint", type=str, default="./checkpoints/final",
+                        help="Path to checkpoint directory to resume training from")
     return parser.parse_args()
 
 
@@ -66,7 +69,7 @@ def train(args):
         collate_fn=collate_fn,
     )
     # Only keep at most 10000 batches in the DataLoader by subsampling the dataset
-    max_batches = 7000
+    max_batches = 5000
     batches_in_dataset = len(dataloader)
     if batches_in_dataset > max_batches:
         print(f"Limiting DataLoader to {max_batches} batches (original: {batches_in_dataset})")
@@ -81,18 +84,30 @@ def train(args):
             shuffle=True,
             collate_fn=collate_fn,
         )
-    # Initialize model
-    print("Initializing model...")
-    model = QwenWithPerceiverCrossAttn(
-        qwen_model_name=args.qwen_model_name,
-        perceiver_model_name=args.perceiver_model_name,
-    )
-    model.train()
-    
-    # Move to device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = model.to(device)
-    print(f"Using device: {device}")
+    # Initialize model (load from checkpoint if specified)
+    if args.resume_from_checkpoint:
+        print(f"Loading model from checkpoint: {args.resume_from_checkpoint}")
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model, tokenizer = load_model_from_checkpoint(
+            checkpoint_dir=args.resume_from_checkpoint,
+            qwen_model_name=args.qwen_model_name,
+            perceiver_model_name=args.perceiver_model_name,
+            device=str(device),
+        )
+        model.train()
+        print(f"Using device: {device}")
+    else:
+        print("Initializing model from scratch...")
+        model = QwenWithPerceiverCrossAttn(
+            qwen_model_name=args.qwen_model_name,
+            perceiver_model_name=args.perceiver_model_name,
+        )
+        model.train()
+        
+        # Move to device
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model = model.to(device)
+        print(f"Using device: {device}")
     
     # Count trainable parameters
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
@@ -189,10 +204,7 @@ def train(args):
                 checkpoint_dir = os.path.join(args.output_dir, f"checkpoint-{global_step}")
                 os.makedirs(checkpoint_dir, exist_ok=True)
                 
-                # Save model
-                model.qwen_model.save_pretrained(checkpoint_dir)
-                
-                # Save Perceiver module and cross-attention components
+                # Save Perceiver module and cross-attention components (these are the trainable parts)
                 additional_components = {
                     "perceiver": model.perceiver.state_dict(),
                 }
@@ -225,9 +237,8 @@ def train(args):
     print("Saving final model...")
     final_dir = os.path.join(args.output_dir, "final")
     os.makedirs(final_dir, exist_ok=True)
-    model.qwen_model.save_pretrained(final_dir)
     
-    # Save Perceiver module and cross-attention components
+    # Save Perceiver module and cross-attention components (these are the trainable parts)
     additional_components = {
         "perceiver": model.perceiver.state_dict(),
     }
