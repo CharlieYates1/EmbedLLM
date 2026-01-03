@@ -5,10 +5,7 @@ import torch
 import torch.nn as nn
 from typing import Optional
 
-try:
-    from transformers import PerceiverModel
-except ImportError:
-    PerceiverModel = None
+from transformers import PerceiverModel
 
 class PerceiverIOModule(nn.Module):
     """
@@ -24,46 +21,30 @@ class PerceiverIOModule(nn.Module):
     ):
         super().__init__()
         self.perceiver = None
-        self.fallback_encoder = None
         self.input_projection = None
 
-        if PerceiverModel is not None:
-            try:
-                # Load with low_cpu_mem_usage to reduce memory spikes
-                self.perceiver = PerceiverModel.from_pretrained(model_name)
-                # Get actual latent dim from model config if available
-                if hasattr(self.perceiver.config, 'd_latents'):
-                    self.latent_dim = self.perceiver.config.d_latents
-                    print(f"Perceiver latent dimension: {self.latent_dim}")
-                else:
-                    raise ValueError("Could not find Perceiver latent dimension in config")
-
-                if hasattr(self.perceiver.config, 'num_latents'):
-                    self.num_latents = self.perceiver.config.num_latents
-                    print(f"Perceiver number of latents: {self.num_latents}")
-                else:
-                    raise ValueError("Could not find Perceiver number of latents in config")
-                
-                # Get Perceiver's expected input dimension
-                if hasattr(self.perceiver.config, 'd_model'):
-                    perceiver_input_dim = self.perceiver.config.d_model
-                elif hasattr(self.perceiver.config, 'd_input'):
-                    perceiver_input_dim = self.perceiver.config.d_input
-                else:
-                    # Default fallback
-                    perceiver_input_dim = 704
-                    print(f"Warning: Could not find Perceiver input dimension in config, using default: {perceiver_input_dim}")
-                
-                # Create projection layer if input_dim is provided and different from Perceiver's expected dim
-                if input_dim is not None and input_dim != perceiver_input_dim:
-                    self.input_projection = nn.Linear(input_dim, perceiver_input_dim)
-                    print(f"Created input projection: {input_dim} -> {perceiver_input_dim}")
-                else:
-                    print(f"Perceiver input dimension: {perceiver_input_dim}, LLM embedding dimension: {input_dim}")
-            except Exception as e:
-                print(f"Warning: Could not load Perceiver IO model '{model_name}'. Error: {e}")
-                print("Creating a simple MLP-based encoder as fallback.")
-                raise e
+        self.perceiver = PerceiverModel.from_pretrained(model_name)
+        self.latent_dim = self.perceiver.config.d_latents
+        print(f"Perceiver latent dimension: {self.latent_dim}")
+        self.num_latents = self.perceiver.config.num_latents
+        print(f"Perceiver number of latents: {self.num_latents}")
+        
+        # Get Perceiver's expected input dimension
+        if hasattr(self.perceiver.config, 'd_model'):
+            perceiver_input_dim = self.perceiver.config.d_model
+        elif hasattr(self.perceiver.config, 'd_input'):
+            perceiver_input_dim = self.perceiver.config.d_input
+        else:
+            # Default fallback
+            perceiver_input_dim = 704
+            print(f"Warning: Could not find Perceiver input dimension in config, using default: {perceiver_input_dim}")
+        
+        # Create projection layer if input_dim is provided and different from Perceiver's expected dim
+        if input_dim is not None and input_dim != perceiver_input_dim:
+            self.input_projection = nn.Linear(input_dim, perceiver_input_dim, dtype=torch.float16)
+            print(f"Created input projection: {input_dim} -> {perceiver_input_dim}")
+        else:
+            print(f"Perceiver input dimension: {perceiver_input_dim}, LLM embedding dimension: {input_dim}")
     
     def freeze_base_model(self):
         """
@@ -99,6 +80,7 @@ class PerceiverIOModule(nn.Module):
         Returns:
             Latent representations of shape (batch_size, num_latents, latent_dim)
         """
+        print("Inputs before projection: ", inputs)
         # Project inputs to Perceiver's expected dimension if needed
         if self.input_projection is not None:
             inputs = self.input_projection(inputs)

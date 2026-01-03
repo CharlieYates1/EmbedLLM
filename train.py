@@ -72,6 +72,7 @@ def train(args):
         perceiver_model_name=args.perceiver_model_name,
     )
     model.train()
+    model.half()
     
     # Move to device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -92,6 +93,7 @@ def train(args):
         trainable_params,
         lr=args.learning_rate,
         weight_decay=0.01,
+        eps=1e-7,
     )
     
     # Learning rate scheduler
@@ -122,19 +124,23 @@ def train(args):
                 
                 # Show first few tokens of input
                 input_sample = input_ids[0, :50].cpu().tolist()  # First 50 tokens
-                print(f"Last 50 input tokens: {input_sample}")
+                print(f"First 50 input tokens: {input_sample}")
                 print(f"Input text (First 200 chars): {tokenizer.decode(input_ids[0], skip_special_tokens=True)[:200]}")
+                print("=" * 50 + "\n")
+
+                print(f"First 50 labels: {labels[0, :50].cpu().tolist()}")
                 print("=" * 50 + "\n")
             
             # Forward pass
             optimizer.zero_grad()
-            with torch.autocast("cuda", dtype=torch.float16, enabled=True):
-                model.update_perceiver_outputs(input_ids)
-                logits, loss = model(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask,
-                    labels=labels,
-                )
+            torch.autograd.set_detect_anomaly(True)
+            logits, loss = model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                labels=labels,
+                perceiver_input_ids=input_ids,
+            )
+
             if global_step == 0:
                 print("Predicted text: ", tokenizer.decode(torch.argmax(logits, dim=-1)[0][:10], skip_special_tokens=True))
             

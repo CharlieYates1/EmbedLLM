@@ -234,31 +234,18 @@ class ConversationDataset(Dataset):
         )
         
         token_ids = encoded["input_ids"][0].tolist()
-        
-        # Find turn boundaries
-        turn_boundaries = self.find_turn_boundaries(token_ids, turn_separator_ids)
-        
-        # Remove padding tokens from boundaries
-        padding_id = self.tokenizer.pad_token_id
-        if padding_id:
-            # Adjust boundaries to exclude padding
-            actual_length = len([t for t in token_ids if t != padding_id])
-            turn_boundaries = [
-                (start, min(end, actual_length)) 
-                for start, end in turn_boundaries
-                if start < actual_length
-            ]
+        attention_mask = encoded["attention_mask"][0].tolist()
         
         # Create labels for next token prediction
         # Shift input_ids by 1 for next token prediction
-        labels = token_ids[1:] + [self.tokenizer.pad_token_id or -100]
-        labels = torch.tensor(labels)
+        labels = token_ids
+        labels = torch.tensor(labels).to(dtype=torch.long)
+        labels[torch.tensor(attention_mask) == 0] = -100
         
         return {
             "input_ids": encoded["input_ids"][0],
             "attention_mask": encoded["attention_mask"][0],
             "labels": labels,
-            "turn_boundaries": turn_boundaries,
         }
 
 

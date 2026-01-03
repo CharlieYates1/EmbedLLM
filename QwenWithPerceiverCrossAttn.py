@@ -36,6 +36,7 @@ class QwenWithPerceiverCrossAttn(nn.Module):
             torch_dtype=torch.float16,
             trust_remote_code=True
         )
+        self.gate = nn.Parameter(torch.tensor(-4.0, dtype=torch.float16))
 
         self.model_dtype = next(self.qwen_model.parameters()).dtype
 
@@ -65,7 +66,6 @@ class QwenWithPerceiverCrossAttn(nn.Module):
         
         # Get the target layer
         self.target_layer = layers[self.layer_index]
-        self.target_layer.perceiver_outputs = None
         
         # Modify the specified layer
         self._freeze_qwen_model()
@@ -109,6 +109,7 @@ class QwenWithPerceiverCrossAttn(nn.Module):
             use_cache=False,
             cache_position=None,
             position_embeddings=None,
+            perceiver_inputs=None,
             **kwargs,
         ):  
             # Call original forward (full block)
@@ -133,15 +134,17 @@ class QwenWithPerceiverCrossAttn(nn.Module):
                 other_outputs = ()
             
             # Apply cross-attention
-            if self.target_layer.perceiver_outputs is not None:
+            alpha = torch.sigmoid(self.gate)
+            if perceiver_inputs is not None:
+                perceiver_outputs = self.perceiver(perceiver_inputs)
                 cross_attn_output, cross_attn_weights = self.target_layer.perceiver_cross_attn(
                     hidden_states=hidden_states,
-                    perceiver_outputs=self.target_layer.perceiver_outputs,
+                    perceiver_outputs=perceiver_outputs,
                 )
                 
                 # Add residual and layer norm
                 hidden_states = self.target_layer.cross_attn_layer_norm(
-                    hidden_states + cross_attn_output
+                    hidden_states + alpha * cross_attn_output
                 )
             
             # Return in same format as original
@@ -150,14 +153,6 @@ class QwenWithPerceiverCrossAttn(nn.Module):
             return hidden_states
         
         self.target_layer.forward = patched_forward
-
-    def update_perceiver_outputs(self, input_ids: torch.Tensor):
-        """Update the Perceiver outputs."""
-        embed_layer = self.qwen_model.get_input_embeddings()
-        inputs_embeds = embed_layer(input_ids)
-        if inputs_embeds.dtype != self.model_dtype:
-            inputs_embeds = inputs_embeds.to(dtype=self.model_dtype)
-        self.target_layer.perceiver_outputs = self.perceiver(inputs_embeds)
     
     def forward(
         self,
@@ -171,9 +166,17 @@ class QwenWithPerceiverCrossAttn(nn.Module):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
+        perceiver_input_ids: Optional[torch.Tensor] = None,
         **kwargs,
     ):
-        # Standard forward through model
+        # convert perceiver inputs to embeddings
+        if perceiver_input_ids is not None:
+            perceiver_inputs = self.qwen_model.get_input_embeddings()(perceiver_input_ids)
+            if perceiver_inputs.dtype != self.model_dtype:
+                perceiver_inputs = perceiver_inputs.to(dtype=self.model_dtype)
+        else:
+            perceiver_inputs = None
+
         outputs = self.qwen_model(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -184,6 +187,7 @@ class QwenWithPerceiverCrossAttn(nn.Module):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
+            perceiver_inputs=perceiver_inputs,
             **kwargs,
         )
         
