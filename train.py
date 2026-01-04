@@ -11,8 +11,6 @@ from accelerate import Accelerator
 
 from QwenWithPerceiverCrossAttn import QwenWithPerceiverCrossAttn
 from data_utils import ConversationDataset, collate_fn
-from load_checkpoint import load_model
-
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train Perceiver IO + Qwen 3 4B model")
@@ -86,16 +84,14 @@ def train(args):
         )
     # Initialize model (load from checkpoint if specified)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model, tokenizer = load_model(
-        checkpoint_dir=args.resume_from_checkpoint,
+    model = QwenWithPerceiverCrossAttn(
         qwen_model_name=args.qwen_model_name,
         perceiver_model_name=args.perceiver_model_name,
         device=str(device),
-        from_checkpoint=args.resume_from_checkpoint is not None,
-        use_lora=False,  # Enable LoRA when resuming
-        lora_r=args.lora_r,
-        lora_alpha=args.lora_alpha,
-        lora_dropout=args.lora_dropout,
+    )
+    model.configure(
+        checkpoint_dir=args.resume_from_checkpoint,
+        use_lora=False,
     )
     model.train()
     print(f"Using device: {device}")

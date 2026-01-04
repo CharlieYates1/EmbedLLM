@@ -3,10 +3,13 @@ Integration code for adding memory cross-attention to Qwen3-4B model.
 This module provides utilities to modify Qwen3 models from Hugging Face.
 """
 
+import os
+
 import torch
 import torch.nn as nn
 from typing import Optional, Tuple, Dict, Any, List
 from transformers import AutoModelForCausalLM
+
 from perceiver_module import PerceiverIOModule
 from PerceiverCrossAttention import PerceiverCrossAttention
 
@@ -20,19 +23,8 @@ class QwenWithPerceiverCrossAttn(nn.Module):
         qwen_model_name: str = "Bossologist/Qwen3-4B-Instruct-2507_general_ft_merged",
         perceiver_model_name: str = "deepmind/multimodal-perceiver",
         layer_index: int = 7,
-        use_lora: bool = False,
-        lora_r: int = 16,
-        lora_alpha: int = 32,
-        lora_dropout: float = 0.1,
+        device: str = "cuda",
     ):
-        """
-        Args:
-            model: Qwen3 model from transformers
-            layer_index: Layer index (0-based) to insert cross-attention
-            memory_size: Number of memory vectors
-            insert_after_ffn: If True, insert after feed-forward; if False, after self-attention
-            memory_manager: Optional pre-initialized memory manager
-        """
         super().__init__()
         
         self.qwen_model = AutoModelForCausalLM.from_pretrained(
@@ -40,11 +32,10 @@ class QwenWithPerceiverCrossAttn(nn.Module):
             trust_remote_code=True
         )
 
-        self.model_dtype = next(self.qwen_model.parameters()).dtype
-
         self.config = self.qwen_model.config
         self.hidden_size = self.config.hidden_size
         self.num_query_heads = self.config.num_attention_heads
+        self.device = device
 
         self.perceiver = PerceiverIOModule(
             model_name=perceiver_model_name,
@@ -68,10 +59,19 @@ class QwenWithPerceiverCrossAttn(nn.Module):
         
         # Get the target layer
         self.target_layer = layers[self.layer_index]
-        
-        # Modify the specified layer
-        self._freeze_qwen_model()
+
+    def configure(self, checkpoint_dir: str = None, use_lora: bool = False):
+        if use_lora:
+            self.use_lora = True
+        if not use_lora:
+            self._freeze_qwen_model()
         self._modify_layer()
+        if checkpoint_dir is not None:
+            additional_path = os.path.join(checkpoint_dir, "additional_components.pt")
+            additional_components = torch.load(additional_path, map_location=self.device)
+            self.perceiver.load_state_dict(additional_components["perceiver"])
+            self.target_layer.perceiver_cross_attn.load_state_dict(additional_components["perceiver_cross_attn"], strict=False)
+            self.target_layer.cross_attn_layer_norm.load_state_dict(additional_components["cross_attn_layer_norm"], strict=False)
 
     def _freeze_qwen_model(self):
         """Freeze the Qwen model."""
