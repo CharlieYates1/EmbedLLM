@@ -6,12 +6,50 @@ import os
 from transformers import AutoTokenizer
 from QwenWithPerceiverCrossAttn import QwenWithPerceiverCrossAttn
 
+def load_model(
+    qwen_model_name: str = "Bossologist/Qwen3-4B-Instruct-2507_general_ft_merged",
+    perceiver_model_name: str = "deepmind/multimodal-perceiver",
+    device: str = None,
+    use_lora: bool = False,
+    lora_r: int = 16,
+    lora_alpha: int = 32,
+    lora_dropout: float = 0.1,
+    from_checkpoint: bool = False,
+    checkpoint_dir: str = None,
+):
+    tokenizer = AutoTokenizer.from_pretrained(qwen_model_name)
+    if not from_checkpoint:
+        model = QwenWithPerceiverCrossAttn(
+            qwen_model_name=qwen_model_name,
+            perceiver_model_name=perceiver_model_name,
+            use_lora=use_lora,
+            lora_r=lora_r,
+            lora_alpha=lora_alpha,
+            lora_dropout=lora_dropout,
+        )
+    else:
+        model = load_model_from_checkpoint(
+            checkpoint_dir=checkpoint_dir,
+            qwen_model_name=qwen_model_name,
+            perceiver_model_name=perceiver_model_name,
+            device=device,
+            use_lora=use_lora,
+            lora_r=lora_r,
+            lora_alpha=lora_alpha,
+            lora_dropout=lora_dropout,
+        )
+    return model, tokenizer
+
 
 def load_model_from_checkpoint(
     checkpoint_dir: str,
     qwen_model_name: str = "Bossologist/Qwen3-4B-Instruct-2507_general_ft_merged",
     perceiver_model_name: str = "deepmind/multimodal-perceiver",
     device: str = None,
+    use_lora: bool = False,
+    lora_r: int = 16,
+    lora_alpha: int = 32,
+    lora_dropout: float = 0.1,
 ):
     """
     Load QwenWithPerceiverCrossAttn model from checkpoint.
@@ -24,24 +62,11 @@ def load_model_from_checkpoint(
     
     Returns:
         model: Loaded model
-        tokenizer: Loaded tokenizer
     """
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
     
     print(f"Loading model from checkpoint: {checkpoint_dir}")
-    
-    # Load tokenizer
-    tokenizer_path = checkpoint_dir
-    if os.path.exists(os.path.join(checkpoint_dir, "tokenizer_config.json")):
-        print("Loading tokenizer from checkpoint...")
-        tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
-    else:
-        print(f"Tokenizer not found in checkpoint, loading from {qwen_model_name}...")
-        tokenizer = AutoTokenizer.from_pretrained(qwen_model_name)
-    
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
     
     # Check if checkpoint has model files, if so use checkpoint, otherwise use base model name
     config_path = os.path.join(checkpoint_dir, "config.json")
@@ -114,7 +139,7 @@ def load_model_from_checkpoint(
     model = model.to(device)
     print(f"Model loaded on device: {device}")
     
-    return model, tokenizer
+    return model
 
 
 if __name__ == "__main__":

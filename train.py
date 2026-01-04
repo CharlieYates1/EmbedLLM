@@ -11,12 +11,12 @@ from accelerate import Accelerator
 
 from QwenWithPerceiverCrossAttn import QwenWithPerceiverCrossAttn
 from data_utils import ConversationDataset, collate_fn
-from load_checkpoint import load_model_from_checkpoint
+from load_checkpoint import load_model
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train Perceiver IO + Qwen 3 4B model")
-    parser.add_argument("--data_path", type=str, default="Bossologist/general_Qwen3_ft_dataset",
+    parser.add_argument("--data_path", type=str, default="Bossologist/Qwen3_persona_ft",
                         help="Path to conversation data JSON or HuggingFace dataset name")
     parser.add_argument("--text_column", type=str, default=None,
                         help="Column name in HuggingFace dataset containing conversation text (auto-detected if not specified)")
@@ -25,9 +25,9 @@ def parse_args():
                         help="Qwen model name")
     parser.add_argument("--perceiver_model_name", type=str, default="deepmind/multimodal-perceiver",
                         help="Perceiver IO model name")
-    parser.add_argument("--batch_size", type=int, default=4, help="Batch size")
+    parser.add_argument("--batch_size", type=int, default=1, help="Batch size")
     parser.add_argument("--learning_rate", type=float, default=1e-5, help="Learning rate")
-    parser.add_argument("--num_epochs", type=int, default=1, help="Number of epochs")
+    parser.add_argument("--num_epochs", type=int, default=3, help="Number of epochs")
     parser.add_argument("--max_length", type=int, default=128, help="Maximum sequence length")
     parser.add_argument("--warmup_steps", type=int, default=100, help="Warmup steps")
     parser.add_argument("--save_steps", type=int, default=20000, help="Save checkpoint every N steps")
@@ -39,7 +39,7 @@ def parse_args():
                         help="Enable gradient checkpointing to save memory (default: True)")
     parser.add_argument("--no_gradient_checkpointing", dest="gradient_checkpointing", action="store_false",
                         help="Disable gradient checkpointing")
-    parser.add_argument("--resume_from_checkpoint", type=str, default="./checkpoints/final",
+    parser.add_argument("--resume_from_checkpoint", type=str, default="./checkpoints/checkpoint-20000",
                         help="Path to checkpoint directory to resume training from")
     return parser.parse_args()
 
@@ -69,7 +69,7 @@ def train(args):
         collate_fn=collate_fn,
     )
     # Only keep at most 10000 batches in the DataLoader by subsampling the dataset
-    max_batches = 5000
+    max_batches = 30000
     batches_in_dataset = len(dataloader)
     if batches_in_dataset > max_batches:
         print(f"Limiting DataLoader to {max_batches} batches (original: {batches_in_dataset})")
@@ -85,30 +85,21 @@ def train(args):
             collate_fn=collate_fn,
         )
     # Initialize model (load from checkpoint if specified)
-    if args.resume_from_checkpoint:
-        print(f"Loading model from checkpoint: {args.resume_from_checkpoint}")
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        model, tokenizer = load_model_from_checkpoint(
-            checkpoint_dir=args.resume_from_checkpoint,
-            qwen_model_name=args.qwen_model_name,
-            perceiver_model_name=args.perceiver_model_name,
-            device=str(device),
-        )
-        model.train()
-        print(f"Using device: {device}")
-    else:
-        print("Initializing model from scratch...")
-        model = QwenWithPerceiverCrossAttn(
-            qwen_model_name=args.qwen_model_name,
-            perceiver_model_name=args.perceiver_model_name,
-        )
-        model.train()
-        
-        # Move to device
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        model = model.to(device)
-        print(f"Using device: {device}")
-    
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model, tokenizer = load_model(
+        checkpoint_dir=args.resume_from_checkpoint,
+        qwen_model_name=args.qwen_model_name,
+        perceiver_model_name=args.perceiver_model_name,
+        device=str(device),
+        from_checkpoint=args.resume_from_checkpoint is not None,
+        use_lora=False,  # Enable LoRA when resuming
+        lora_r=args.lora_r,
+        lora_alpha=args.lora_alpha,
+        lora_dropout=args.lora_dropout,
+    )
+    model.train()
+    print(f"Using device: {device}")
+
     # Count trainable parameters
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     total_params = sum(p.numel() for p in model.parameters())
@@ -150,6 +141,7 @@ def train(args):
         for batch in progress_bar:
             # Move batch to device
             input_ids = batch["input_ids"].to(device)
+            conversation_ids = batch["conversation_ids"].to(device)
             attention_mask = batch["attention_mask"].to(device)
             labels = batch["labels"].to(device)
 
@@ -173,7 +165,7 @@ def train(args):
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 labels=labels,
-                perceiver_input_ids=input_ids,
+                perceiver_input_ids=conversation_ids,
             )
 
             if torch.isinf(logits).any() or torch.isnan(logits).any():

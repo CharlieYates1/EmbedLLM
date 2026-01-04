@@ -21,14 +21,16 @@ def get_clean_turns(conversation: str) -> List[dict]:
         role = None
         actual_text = turn.replace("<|im_start|>", "").replace("<|im_end|>", "").strip()
         if actual_text.startswith("user"):
-            actual_text = actual_text.split("\n")[1].strip()
+            actual_text = "".join(actual_text.split("\n")[1:]).strip()
             role = "user"
         elif actual_text.startswith("assistant"):
-            actual_text = actual_text.split("\n")[1].strip()
+            actual_text = "".join(actual_text.split("\n")[1:]).strip()
             role = "assistant"
-        else:
-            actual_text = actual_text.split("\n")[1].strip()
+        elif actual_text.startswith("system"):
+            actual_text = "".join(actual_text.split("\n")[1:]).strip()
             role = "system"
+        else:
+            print(f"Unknown role: {actual_text}")
         ret.append({"role": role, "content": actual_text})
     return ret
 
@@ -134,8 +136,8 @@ class ConversationDataset(Dataset):
         labels[torch.tensor(attention_mask) == 0] = -100
         
         return {
-            "input_ids": token_ids,
-            "attention_mask": attention_mask,
+            "input_ids": encoded_predictions["input_ids"][0],
+            "attention_mask": encoded_predictions["attention_mask"][0],
             "labels": labels,
             "conversation_ids": encoded["input_ids"][0],
         }
@@ -149,6 +151,6 @@ def collate_fn(batch):
         "input_ids": torch.stack([item["input_ids"] for item in batch]),
         "attention_mask": torch.stack([item["attention_mask"] for item in batch]),
         "labels": torch.stack([item["labels"] for item in batch]),
-        # "turn_boundaries": [item["turn_boundaries"] for item in batch],
+        "conversation_ids": torch.stack([item["conversation_ids"] for item in batch]),
     }
 

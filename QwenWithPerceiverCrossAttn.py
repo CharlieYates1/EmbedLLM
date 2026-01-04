@@ -20,6 +20,10 @@ class QwenWithPerceiverCrossAttn(nn.Module):
         qwen_model_name: str = "Bossologist/Qwen3-4B-Instruct-2507_general_ft_merged",
         perceiver_model_name: str = "deepmind/multimodal-perceiver",
         layer_index: int = 7,
+        use_lora: bool = False,
+        lora_r: int = 16,
+        lora_alpha: int = 32,
+        lora_dropout: float = 0.1,
     ):
         """
         Args:
