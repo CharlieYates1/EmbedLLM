@@ -31,6 +31,8 @@ def get_clean_turns(conversation: str) -> List[dict]:
             role = "system"
         else:
             print(f"Unknown role: {actual_text}")
+        actual_text = actual_text.replace("<think>", "").replace("</think>", "").strip()
+        actual_text = actual_text.replace("<tool>", "").replace("</tool>", "").strip()
         ret.append({"role": role, "content": actual_text})
     return ret
 

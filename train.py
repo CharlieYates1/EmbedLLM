@@ -28,7 +28,7 @@ def parse_args():
     parser.add_argument("--num_epochs", type=int, default=3, help="Number of epochs")
     parser.add_argument("--max_length", type=int, default=128, help="Maximum sequence length")
     parser.add_argument("--warmup_steps", type=int, default=100, help="Warmup steps")
-    parser.add_argument("--save_steps", type=int, default=20000, help="Save checkpoint every N steps")
+    parser.add_argument("--save_steps", type=int, default=5000, help="Save checkpoint every N steps")
     parser.add_argument("--lora_r", type=int, default=16, help="LoRA rank")
     parser.add_argument("--lora_alpha", type=int, default=32, help="LoRA alpha")
     parser.add_argument("--lora_dropout", type=float, default=0.1, help="LoRA dropout")
@@ -91,7 +91,8 @@ def train(args):
     )
     model.configure(
         checkpoint_dir=args.resume_from_checkpoint,
-        use_lora=False,
+        use_lora=True,
+        lora_checkpoint_dir="Bossologist/Qwen3-4B-Instruct-2507_persona_lora",
     )
     model.train()
     print(f"Using device: {device}")
@@ -213,7 +214,8 @@ def train(args):
                         additional_components["cross_attn_layer_norm"] = target_layer.cross_attn_layer_norm.state_dict()
                 
                 torch.save(additional_components, os.path.join(checkpoint_dir, "additional_components.pt"))
-                
+
+                model.qwen_model.save_pretrained(checkpoint_dir)
                 tokenizer.save_pretrained(checkpoint_dir)
                 print(f"\nSaved checkpoint to {checkpoint_dir}")
         
@@ -248,6 +250,7 @@ def train(args):
     
     torch.save(additional_components, os.path.join(final_dir, "additional_components.pt"))
     tokenizer.save_pretrained(final_dir)
+    model.qwen_model.save_pretrained(final_dir)
     print(f"Final model saved to {final_dir}")
 
 

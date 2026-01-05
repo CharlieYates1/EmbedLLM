@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 from typing import Optional, Tuple, Dict, Any, List
 from transformers import AutoModelForCausalLM
+from peft import LoraConfig, get_peft_model, TaskType, PeftModel
 
 from perceiver_module import PerceiverIOModule
 from PerceiverCrossAttention import PerceiverCrossAttention
@@ -43,26 +44,36 @@ class QwenWithPerceiverCrossAttn(nn.Module):
         )
         self.layer_index = layer_index
 
-        # Access transformer layers
-        if hasattr(self.qwen_model, 'model') and hasattr(self.qwen_model.model, 'layers'):
-            layers = self.qwen_model.model.layers
-        elif hasattr(self.qwen_model, 'layers'):
-            layers = self.qwen_model.layers
-        else:
-            raise ValueError("Could not find transformer layers in model")
-        
-        # Verify layer index
-        if self.layer_index < 0 or self.layer_index >= len(layers):
-            raise ValueError(
-                f"Layer index {self.layer_index} out of range [0, {len(layers)})"
-            )
-        
-        # Get the target layer
-        self.target_layer = layers[self.layer_index]
-
-    def configure(self, checkpoint_dir: str = None, use_lora: bool = False):
+    def configure(
+        self, 
+        checkpoint_dir: str = None, 
+        use_lora: bool = False,
+        lora_r: int = 16,
+        lora_alpha: int = 32,
+        lora_dropout: float = 0.1,
+        lora_checkpoint_dir: str = None,
+    ):
         if use_lora:
-            self.use_lora = True
+            if lora_checkpoint_dir is not None:
+                self.qwen_model = PeftModel.from_pretrained(
+                    self.qwen_model, 
+                    lora_checkpoint_dir,
+                    is_trainable=True,  # Make adapters trainable when loading
+                )
+                # PEFT automatically handles trainability, no need to manually set requires_grad
+            else:
+                self.qwen_model = get_peft_model(self.qwen_model, LoraConfig(
+                    task_type=TaskType.CAUSAL_LM,
+                    r=lora_r,
+                    lora_alpha=lora_alpha,
+                    lora_dropout=lora_dropout,
+                    target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
+                    inference_mode=True,
+                ))
+            self.qwen_model.print_trainable_parameters()
+
+        self.target_layer = self.qwen_model.model.model.layers[self.layer_index]
+
         if not use_lora:
             self._freeze_qwen_model()
         self._modify_layer()
