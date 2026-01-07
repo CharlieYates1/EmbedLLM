@@ -68,6 +68,7 @@ class PerceiverIOModule(nn.Module):
         model_name: str = "deepmind/multimodal-perceiver",
         input_dim: Optional[int] = None,
         use_compressor: bool = True,
+        output_dim: Optional[int] = None,
     ):
         super().__init__()
         self.perceiver = None
@@ -103,6 +104,10 @@ class PerceiverIOModule(nn.Module):
                 latent_dim=self.latent_dim,
             )
             print(f"Created CrossAttentionCompressor: {self.num_latents} latents -> {1} vector(s)")
+
+        if output_dim is not None:
+            self.output_projection = nn.Linear(self.latent_dim, output_dim)
+            print(f"Created output projection: {self.latent_dim} -> {output_dim}")
     
     def freeze_base_model(self):
         """
@@ -135,7 +140,9 @@ class PerceiverIOModule(nn.Module):
         if self.compressor is not None:
             compressor_params = sum(p.numel() for p in self.compressor.parameters())
             print(f"CrossAttentionCompressor (trainable): {compressor_params:,} parameters")
-        
+        if self.output_projection is not None:
+            output_proj_params = sum(p.numel() for p in self.output_projection.parameters())
+            print(f"Output projection layer (trainable): {output_proj_params:,} parameters")
 
     def forward(self, inputs: torch.Tensor, attention_mask: Optional[torch.Tensor] = None):
         """
@@ -163,10 +170,13 @@ class PerceiverIOModule(nn.Module):
             
             # If compressor is enabled, compress latents to single vector
             if self.compressor is not None:
-                compressed = self.compressor(latents)  # (batch_size, num_queries, output_dim)
-                return compressed
-            else:
-                return latents
+                latents = self.compressor(latents)  # (batch_size, num_queries, output_dim)
+            
+            if self.output_projection is not None:
+                latents = self.output_projection(latents)  # (batch_size, num_queries, output_dim)
+            
+            return latents
+            
         except Exception as e:
             print(f"Warning: Perceiver IO forward pass failed: {e}")
             raise e
