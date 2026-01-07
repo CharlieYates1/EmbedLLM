@@ -147,7 +147,7 @@ class QwenWithPerceiverCrossAttn(nn.Module):
                 other_outputs = ()
             
             # Apply cross-attention
-            alpha = 0.5
+            alpha = 0 # 0.5
             if perceiver_inputs is not None:
                 perceiver_outputs = self.perceiver(perceiver_inputs)
                 cross_attn_output, cross_attn_weights = self.target_layer.perceiver_cross_attn(

@@ -7,6 +7,55 @@ from typing import Optional
 
 from transformers import PerceiverModel
 
+
+class CrossAttentionCompressor(nn.Module):
+    """
+    Cross-attention module that compresses multiple latent vectors into a single vector.
+    Uses learnable queries to attend over the latent vectors.
+    """
+    def __init__(
+        self,
+        latent_dim: int,
+        num_queries: int = 1,
+        num_heads: int = 8,
+    ):
+        """
+        Args:
+            latent_dim: Dimension of input latent vectors
+            output_dim: Dimension of output vector (defaults to latent_dim)
+            num_queries: Number of learnable query vectors (default 1 for single output)
+            num_heads: Number of attention heads
+        """
+        super().__init__()
+        self.latent_dim = latent_dim
+        self.num_queries = num_queries
+        
+        # Learnable query vectors
+        self.query = nn.Parameter(torch.randn(1, num_queries, latent_dim))
+        
+        # Cross-attention layer
+        self.cross_attn = nn.MultiheadAttention(
+            embed_dim=latent_dim,
+            num_heads=num_heads,
+            batch_first=True
+        )
+        
+    def forward(self, latents: torch.Tensor) -> torch.Tensor:
+        """
+        Compress latent vectors into a single vector using cross-attention.
+        
+        Args:
+            latents: Input latent vectors of shape (batch_size, num_latents, latent_dim)
+            
+        Returns:
+            Compressed vector of shape (batch_size, num_queries, output_dim)
+        """
+        batch_size = latents.shape[0]
+        queries = self.query.expand(batch_size, -1, -1)  # (batch_size, num_queries, latent_dim)
+        attended, _ = self.cross_attn(queries, latents, latents)  # (batch_size, num_queries, latent_dim)
+        
+        return attended
+
 class PerceiverIOModule(nn.Module):
     """
     Wrapper around Perceiver IO model for processing conversation turns.
@@ -18,10 +67,12 @@ class PerceiverIOModule(nn.Module):
         self,
         model_name: str = "deepmind/multimodal-perceiver",
         input_dim: Optional[int] = None,
+        use_compressor: bool = True,
     ):
         super().__init__()
         self.perceiver = None
         self.input_projection = None
+        self.compressor = None
 
         self.perceiver = PerceiverModel.from_pretrained(model_name)
         self.latent_dim = self.perceiver.config.d_latents
@@ -45,11 +96,18 @@ class PerceiverIOModule(nn.Module):
             print(f"Created input projection: {input_dim} -> {perceiver_input_dim}")
         else:
             print(f"Perceiver input dimension: {perceiver_input_dim}, LLM embedding dimension: {input_dim}")
+        
+        # Add cross-attention compressor to convert latents to single vector
+        if use_compressor:
+            self.compressor = CrossAttentionCompressor(
+                latent_dim=self.latent_dim,
+            )
+            print(f"Created CrossAttentionCompressor: {self.num_latents} latents -> {1} vector(s)")
     
     def freeze_base_model(self):
         """
         Freeze all parameters in the base PerceiverModel.
-        The input_projection layer remains trainable.
+        The input_projection and compressor layers remain trainable.
         """
         if self.perceiver is None:
             return
@@ -63,22 +121,33 @@ class PerceiverIOModule(nn.Module):
             for param in self.input_projection.parameters():
                 param.requires_grad = True
         
+        # Keep compressor trainable (it's a new layer we added)
+        if self.compressor is not None:
+            for param in self.compressor.parameters():
+                param.requires_grad = True
+        
         # Print summary
         total = sum(p.numel() for p in self.perceiver.parameters())
         print(f"Frozen base PerceiverModel: {total:,} parameters")
         if self.input_projection is not None:
             input_proj_params = sum(p.numel() for p in self.input_projection.parameters())
             print(f"Input projection layer (trainable): {input_proj_params:,} parameters")
+        if self.compressor is not None:
+            compressor_params = sum(p.numel() for p in self.compressor.parameters())
+            print(f"CrossAttentionCompressor (trainable): {compressor_params:,} parameters")
+        
+
     def forward(self, inputs: torch.Tensor, attention_mask: Optional[torch.Tensor] = None):
         """
-        Process inputs through Perceiver IO.
+        Process inputs through Perceiver IO and optionally compress to single vector.
         
         Args:
             inputs: Input tensor of shape (batch_size, seq_len, input_dim)
             attention_mask: Optional attention mask
             
         Returns:
-            Latent representations of shape (batch_size, num_latents, latent_dim)
+            If use_compressor=True: Compressed vector(s) of shape (batch_size, num_queries, output_dim)
+            If use_compressor=False: Latent representations of shape (batch_size, num_latents, latent_dim)
         """
         # Project inputs to Perceiver's expected dimension if needed
         if self.input_projection is not None:
@@ -90,8 +159,14 @@ class PerceiverIOModule(nn.Module):
                 inputs=inputs,
                 attention_mask=attention_mask
             )
-            outputs = outputs.last_hidden_state
-            return outputs
+            latents = outputs.last_hidden_state  # (batch_size, num_latents, latent_dim)
+            
+            # If compressor is enabled, compress latents to single vector
+            if self.compressor is not None:
+                compressed = self.compressor(latents)  # (batch_size, num_queries, output_dim)
+                return compressed
+            else:
+                return latents
         except Exception as e:
             print(f"Warning: Perceiver IO forward pass failed: {e}")
             raise e
